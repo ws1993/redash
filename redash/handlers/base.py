@@ -1,23 +1,21 @@
 import time
-
 from inspect import isclass
-from flask import Blueprint, current_app, request
 
+from flask import Blueprint, current_app, request
 from flask_login import current_user, login_required
 from flask_restful import Resource, abort
+from sqlalchemy import cast
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm.exc import NoResultFound
+
 from redash import settings
 from redash.authentication import current_org
 from redash.models import db
 from redash.tasks import record_event as record_event_task
 from redash.utils import json_dumps
-from sqlalchemy.orm.exc import NoResultFound
-from sqlalchemy import cast
-from sqlalchemy.dialects import postgresql
-from sqlalchemy_utils import sort_query
+from redash.utils.query_order import sort_query
 
-routes = Blueprint(
-    "redash", __name__, template_folder=settings.fix_assets_path("templates")
-)
+routes = Blueprint("redash", __name__, template_folder=settings.fix_assets_path("templates"))
 
 
 class BaseResource(Resource):
@@ -91,7 +89,7 @@ def paginate(query_set, page, page_size, serializer, **kwargs):
     if page_size > 250 or page_size < 1:
         abort(400, message="Page size is out of range (1-250).")
 
-    results = query_set.paginate(page, page_size)
+    results = query_set.paginate(page=page, per_page=page_size)
 
     # support for old function based serializers
     if isclass(serializer):
@@ -116,9 +114,7 @@ def json_response(response):
 def filter_by_tags(result_set, column):
     if request.args.getlist("tags"):
         tags = request.args.getlist("tags")
-        result_set = result_set.filter(
-            cast(column, postgresql.ARRAY(db.Text)).contains(tags)
-        )
+        result_set = result_set.filter(cast(column, ARRAY(db.Text)).contains(tags))
     return result_set
 
 

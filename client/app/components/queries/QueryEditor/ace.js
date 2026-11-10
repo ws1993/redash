@@ -27,9 +27,13 @@ defineDummySnippets("sql");
 defineDummySnippets("json");
 defineDummySnippets("yaml");
 
+// without this line, ace will try to load a non-existent mode-custom.js file
+// for data sources with syntax = "custom"
+ace.define("ace/mode/custom", [], () => {});
+
 function buildTableColumnKeywords(table) {
   const keywords = [];
-  table.columns.forEach(column => {
+  table.columns.forEach((column) => {
     const columnName = get(column, "name");
     keywords.push({
       name: `${table.name}.${columnName}`,
@@ -46,7 +50,7 @@ function buildKeywordsFromSchema(schema) {
   const columnKeywords = {};
   const tableColumnKeywords = {};
 
-  schema.forEach(table => {
+  schema.forEach((table) => {
     tableKeywords.push({
       name: table.name,
       value: table.name,
@@ -54,7 +58,7 @@ function buildKeywordsFromSchema(schema) {
       meta: "Table",
     });
     tableColumnKeywords[table.name] = buildTableColumnKeywords(table);
-    table.columns.forEach(c => {
+    table.columns.forEach((c) => {
       const columnName = get(c, "name", c);
       columnKeywords[columnName] = capitalize(get(c, "type", "Column"));
     });

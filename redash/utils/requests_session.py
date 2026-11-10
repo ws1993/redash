@@ -1,14 +1,16 @@
+import requests
+
 from redash import settings
+from redash.utils import ssrf
+from redash.utils.ssrf import UnacceptableAddressException  # noqa: F401
 
-from advocate.exceptions import UnacceptableAddressException
 if settings.ENFORCE_PRIVATE_ADDRESS_BLOCK:
-    import advocate as requests_or_advocate
+    requests_or_ssrf = ssrf
 else:
-    import requests as requests_or_advocate
+    requests_or_ssrf = requests
 
 
-
-class ConfiguredSession(requests_or_advocate.Session):
+class ConfiguredSession(requests_or_ssrf.Session):
     def request(self, *args, **kwargs):
         if not settings.REQUESTS_ALLOW_REDIRECTS:
             kwargs.update({"allow_redirects": False})

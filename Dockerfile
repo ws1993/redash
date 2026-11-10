@@ -1,44 +1,51 @@
-FROM node:14.17 as frontend-builder
+FROM node:24-bookworm AS frontend-builder
 
-RUN npm install --global --force yarn@1.22.10
+RUN npm install --global pnpm@10.30.3
 
 # Controls whether to build the frontend assets
 ARG skip_frontend_build
 
-ENV CYPRESS_INSTALL_BINARY=0
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1
 
 RUN useradd -m -d /frontend redash
 USER redash
 
 WORKDIR /frontend
-COPY --chown=redash package.json yarn.lock .yarnrc /frontend/
+COPY --chown=redash package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc /frontend/
 COPY --chown=redash viz-lib /frontend/viz-lib
+COPY --chown=redash scripts /frontend/scripts
 
-# Controls whether to instrument code for coverage information
-ARG code_coverage
-ENV BABEL_ENV=${code_coverage:+test}
-
-RUN if [ "x$skip_frontend_build" = "x" ] ; then yarn --frozen-lockfile --network-concurrency 1; fi
+# Use BuildKit cache mount for pnpm store to speed rebuilds
+RUN --mount=type=cache,id=pnpm-store,target=/frontend/.cache/pnpm,uid=1001,gid=1001 \
+  pnpm config set store-dir /frontend/.cache/pnpm && \
+  if [ "x$skip_frontend_build" = "x" ] ; then pnpm install --frozen-lockfile; fi
 
 COPY --chown=redash client /frontend/client
 COPY --chown=redash webpack.config.js /frontend/
-RUN if [ "x$skip_frontend_build" = "x" ] ; then yarn build; else mkdir -p /frontend/client/dist && touch /frontend/client/dist/multi_org.html && touch /frontend/client/dist/index.html; fi
 
-FROM python:3.7-slim-buster
+# Use the same cache mount for the build step
+RUN --mount=type=cache,id=pnpm-store,target=/frontend/.cache/pnpm,uid=1001,gid=1001 <<EOF
+  if [ "x$skip_frontend_build" = "x" ]; then
+    pnpm run build
+  else
+    mkdir -p /frontend/client/dist
+    touch /frontend/client/dist/multi_org.html
+    touch /frontend/client/dist/index.html
+  fi
+EOF
+
+FROM python:3.13-slim-bookworm
 
 EXPOSE 5000
-
-# Controls whether to install extra dependencies needed for all data sources.
-ARG skip_ds_deps
-# Controls whether to install dev dependencies.
-ARG skip_dev_deps
 
 RUN useradd --create-home redash
 
 # Ubuntu packages
+ARG APT_REFRESH
 RUN apt-get update && \
+  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
   apt-get install -y --no-install-recommends \
+  pkg-config \
   curl \
   gnupg \
   build-essential \
@@ -46,6 +53,8 @@ RUN apt-get update && \
   libffi-dev \
   sudo \
   git-core \
+  # Kerberos, needed for MS SQL Python driver to compile on arm64
+  libkrb5-dev \
   # Postgres client
   libpq-dev \
   # ODBC support:
@@ -64,40 +73,46 @@ RUN apt-get update && \
 
 
 ARG TARGETPLATFORM
-ARG databricks_odbc_driver_url=https://databricks.com/wp-content/uploads/2.6.10.1010-2/SimbaSparkODBC-2.6.10.1010-2-Debian-64bit.zip
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-  curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-  && curl https://packages.microsoft.com/config/debian/10/prod.list > /etc/apt/sources.list.d/mssql-release.list \
-  && apt-get update \
-  && ACCEPT_EULA=Y apt-get install  -y --no-install-recommends msodbcsql17 \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* \
-  && curl "$databricks_odbc_driver_url" --location --output /tmp/simba_odbc.zip \
-  && chmod 600 /tmp/simba_odbc.zip \
-  && unzip /tmp/simba_odbc.zip -d /tmp/ \
-  && dpkg -i /tmp/SimbaSparkODBC-*/*.deb \
-  && printf "[Simba]\nDriver = /opt/simba/spark/lib/64/libsparkodbc_sb64.so" >> /etc/odbcinst.ini \
-  && rm /tmp/simba_odbc.zip \
-  && rm -rf /tmp/SimbaSparkODBC*; fi
+RUN <<EOF
+  if [ "$TARGETPLATFORM" = "linux/amd64" ]; then
+    curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+    curl https://packages.microsoft.com/config/debian/12/prod.list > /etc/apt/sources.list.d/mssql-release.list
+    apt-get update
+    ACCEPT_EULA=Y apt-get install  -y --no-install-recommends msodbcsql18
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+  fi
+EOF
 
 WORKDIR /app
 
-# Disable PIP Cache and Version Check
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV PIP_NO_CACHE_DIR=1
+# Install uv (pinned) from the official distroless image for a reproducible build.
+COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
 
-# rollback pip version to avoid legacy resolver problem
-RUN pip install pip==20.2.4;
+# Install into the system environment rather than a project-local virtualenv,
+# so console scripts (gunicorn, supervisord, rq, ...) are on PATH.
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
-# We first copy only the requirements file, to avoid rebuilding on every file change.
-COPY requirements_all_ds.txt ./
-RUN if [ "x$skip_ds_deps" = "x" ] ; then pip install -r requirements_all_ds.txt ; else echo "Skipping pip install -r requirements_all_ds.txt" ; fi
+COPY pyproject.toml uv.lock ./
 
-COPY requirements_dev.txt ./
-RUN if [ "x$skip_dev_deps" = "x" ] ; then pip install -r requirements_dev.txt ; fi
-
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
+ARG UV_OPTIONS="--frozen --no-install-project --no-default-groups"
+# for LDAP authentication, install with the `ldap3` group
+# disabled by default due to GPL license conflict
+ARG install_groups="main,all_ds,dev"
+# Translate the comma-separated install_groups list into uv flags. "main"
+# refers to the project's base dependencies (always installed); every other
+# entry maps to a uv dependency group.
+RUN --mount=type=cache,target=/root/.cache/uv <<EOF
+  group_flags=""
+  for group in $(echo "$install_groups" | tr ',' ' '); do
+    if [ "$group" != "main" ]; then
+      group_flags="$group_flags --group $group"
+    fi
+  done
+  uv sync $UV_OPTIONS $group_flags
+EOF
 
 COPY --chown=redash . /app
 COPY --from=frontend-builder --chown=redash /frontend/client/dist /app/client/dist

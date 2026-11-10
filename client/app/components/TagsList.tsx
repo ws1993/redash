@@ -17,16 +17,23 @@ type TagsListProps = {
   tagsUrl: string;
   showUnselectAll: boolean;
   onUpdate?: (selectedTags: string[]) => void;
+  selectedTags?: string[];
 };
 
-function TagsList({ tagsUrl, showUnselectAll = false, onUpdate }: TagsListProps): JSX.Element | null {
+function TagsList({
+  tagsUrl,
+  showUnselectAll = false,
+  onUpdate,
+  selectedTags: controlledTags,
+}: TagsListProps): JSX.Element | null {
   const [allTags, setAllTags] = useState<Tag[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [localTags, setSelectedTags] = useState<string[]>([]);
+  const selectedTags = controlledTags === undefined ? localTags : controlledTags;
 
   useEffect(() => {
     let isCancelled = false;
 
-    getTags(tagsUrl).then(tags => {
+    getTags(tagsUrl).then((tags) => {
       if (!isCancelled) {
         setAllTags(tags);
       }
@@ -38,8 +45,8 @@ function TagsList({ tagsUrl, showUnselectAll = false, onUpdate }: TagsListProps)
   }, [tagsUrl]);
 
   const toggleTag = useCallback(
-    (event, tag) => {
-      let newSelectedTags;
+    (event: React.MouseEvent, tag: string) => {
+      let newSelectedTags: string[];
       if (event.shiftKey) {
         // toggle tag
         if (includes(selectedTags, tag)) {
@@ -89,11 +96,12 @@ function TagsList({ tagsUrl, showUnselectAll = false, onUpdate }: TagsListProps)
 
       <div className="tiled">
         <Menu className="invert-stripe-position" mode="inline" selectedKeys={selectedTags}>
-          {map(allTags, tag => (
+          {map(allTags, (tag) => (
             <Menu.Item key={tag.name} className="m-0">
               <PlainButton
                 className="d-flex align-items-center justify-content-between"
-                onClick={event => toggleTag(event, tag.name)}>
+                onClick={(event) => toggleTag(event, tag.name)}
+              >
                 <span className="max-character col-xs-11">{tag.name}</span>
                 <Badge count={tag.count} />
               </PlainButton>

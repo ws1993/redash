@@ -9,6 +9,7 @@ import QueryControlDropdown from "@/components/EditVisualizationButton/QueryCont
 import EditVisualizationButton from "@/components/EditVisualizationButton";
 import useQueryResultData from "@/lib/useQueryResultData";
 import { durationHumanize, pluralize, prettySize } from "@/lib/utils";
+import { isUndefined } from "lodash";
 
 import "./QueryExecutionMetadata.less";
 
@@ -51,7 +52,8 @@ export default function QueryExecutionMetadata({
                   "Result truncated to " +
                   queryResultData.rows.length +
                   " rows. Databricks may truncate query results that are unstably large."
-                }>
+                }
+              >
                 <WarningTwoTone twoToneColor="#FF9800" />
               </Tooltip>
             </span>
@@ -67,10 +69,9 @@ export default function QueryExecutionMetadata({
           )}
           {isQueryExecuting && <span>Running&hellip;</span>}
         </span>
-        {queryResultData.metadata.data_scanned && (
+        {!isUndefined(queryResultData.metadata.data_scanned) && !isQueryExecuting && (
           <span className="m-l-5">
-            Data Scanned
-            <strong>{prettySize(queryResultData.metadata.data_scanned)}</strong>
+            Data Scanned <strong>{prettySize(queryResultData.metadata.data_scanned)}</strong>
           </span>
         )}
       </span>
@@ -87,8 +88,8 @@ export default function QueryExecutionMetadata({
 }
 
 QueryExecutionMetadata.propTypes = {
-  query: PropTypes.object.isRequired, // eslint-disable-line react/forbid-prop-types
-  queryResult: PropTypes.object.isRequired, // eslint-disable-line react/forbid-prop-types
+  query: PropTypes.object.isRequired,
+  queryResult: PropTypes.object.isRequired,
   isQueryExecuting: PropTypes.bool,
   selectedVisualization: PropTypes.number,
   showEditVisualizationButton: PropTypes.bool,

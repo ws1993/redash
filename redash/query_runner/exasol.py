@@ -1,7 +1,15 @@
 import datetime
+import ssl
 
-from redash.query_runner import *
-from redash.utils import json_dumps
+from redash.query_runner import (
+    TYPE_DATE,
+    TYPE_DATETIME,
+    TYPE_FLOAT,
+    TYPE_INTEGER,
+    TYPE_STRING,
+    BaseQueryRunner,
+    register,
+)
 
 
 def _exasol_type_mapper(val, data_type):
@@ -67,9 +75,10 @@ class Exasol(BaseQueryRunner):
                 "host": {"type": "string"},
                 "port": {"type": "number", "default": 8563},
                 "encrypted": {"type": "boolean", "title": "Enable SSL Encryption"},
+                "verify_ssl": {"type": "boolean", "title": "Verify SSL Certificate", "default": True},
             },
             "required": ["host", "port", "user", "password"],
-            "order": ["host", "port", "user", "password", "encrypted"],
+            "order": ["host", "port", "user", "password", "encrypted", "verify_ssl"],
             "secret": ["password"],
         }
 
@@ -78,11 +87,19 @@ class Exasol(BaseQueryRunner):
             self.configuration.get("host", None),
             self.configuration.get("port", 8563),
         )
+        # Verify the server certificate unless it's explicitly turned off, e.g. for a
+        # server with a self-signed certificate.
+        if self.configuration.get("verify_ssl", True):
+            websocket_sslopt = {"cert_reqs": ssl.CERT_REQUIRED}
+        else:
+            websocket_sslopt = {"cert_reqs": ssl.CERT_NONE}
+
         return pyexasol.connect(
             dsn=exahost,
             user=self.configuration.get("user", None),
             password=self.configuration.get("password", None),
             encryption=self.configuration.get("encrypted", True),
+            websocket_sslopt=websocket_sslopt,
             compression=True,
             json_lib="rapidjson",
             fetch_mapper=_exasol_type_mapper,
@@ -95,21 +112,19 @@ class Exasol(BaseQueryRunner):
         try:
             statement = connection.execute(query)
             columns = [
-                {"name": n, "friendly_name": n, "type": _type_mapper(t)}
-                for (n, t) in statement.columns().items()
+                {"name": n, "friendly_name": n, "type": _type_mapper(t)} for (n, t) in statement.columns().items()
             ]
             cnames = statement.column_names()
 
             rows = [dict(zip(cnames, row)) for row in statement]
             data = {"columns": columns, "rows": rows}
-            json_data = json_dumps(data)
         finally:
             if statement is not None:
                 statement.close()
 
             connection.close()
 
-        return json_data, error
+        return data, error
 
     def get_schema(self, get_stats=False):
         query = """
@@ -126,7 +141,7 @@ class Exasol(BaseQueryRunner):
             statement = connection.execute(query)
             result = {}
 
-            for (schema, table_name, column) in statement:
+            for schema, table_name, column in statement:
                 table_name_with_schema = "%s.%s" % (schema, table_name)
 
                 if table_name_with_schema not in result:

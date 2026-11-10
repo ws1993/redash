@@ -81,12 +81,19 @@ function DashboardListExtraActions(props) {
 }
 
 function DashboardList({ controller }) {
+  let usedListColumns = listColumns;
+  if (controller.params.currentPage === "favorites") {
+    usedListColumns = [
+      ...usedListColumns,
+      Columns.dateTime.sortable({ title: "Starred At", field: "starred_at", width: "1%" }),
+    ];
+  }
   const {
     areExtraActionsAvailable,
     listColumns: tableColumns,
     Component: ExtraActionsComponent,
     selectedItems,
-  } = useItemsListExtraActions(controller, listColumns, DashboardListExtraActions);
+  } = useItemsListExtraActions(controller, usedListColumns, DashboardListExtraActions);
 
   return (
     <div className="page-dashboard-list">
@@ -108,10 +115,16 @@ function DashboardList({ controller }) {
               placeholder="Search Dashboards..."
               label="Search dashboards"
               value={controller.searchTerm}
+              resetVersion={controller.searchInputVersion}
               onChange={controller.updateSearch}
             />
             <Sidebar.Menu items={sidebarMenu} selected={controller.params.currentPage} />
-            <Sidebar.Tags url="api/dashboards/tags" onChange={controller.updateSelectedTags} showUnselectAll />
+            <Sidebar.Tags
+              url="api/dashboards/tags"
+              selectedTags={controller.selectedTags}
+              onChange={controller.updateSelectedTags}
+              showUnselectAll
+            />
           </Layout.Sidebar>
           <Layout.Content>
             <div data-test="DashboardLayoutContent">
@@ -139,9 +152,9 @@ function DashboardList({ controller }) {
                       showPageSizeSelect
                       totalCount={controller.totalItemsCount}
                       pageSize={controller.itemsPerPage}
-                      onPageSizeChange={itemsPerPage => controller.updatePagination({ itemsPerPage })}
+                      onPageSizeChange={(itemsPerPage) => controller.updatePagination({ itemsPerPage })}
                       page={controller.page}
-                      onChange={page => controller.updatePagination({ page })}
+                      onChange={(page) => controller.updatePagination({ page })}
                     />
                   </div>
                 </React.Fragment>
@@ -170,10 +183,10 @@ const DashboardListPage = itemsList(
         }[currentPage];
       },
       getItemProcessor() {
-        return item => new Dashboard(item);
+        return (item) => new Dashboard(item);
       },
     }),
-  () => new UrlStateStorage({ orderByField: "created_at", orderByReverse: true })
+  ({ ...props }) => new UrlStateStorage({ orderByField: props.orderByField ?? "created_at", orderByReverse: true })
 );
 
 routes.register(
@@ -181,7 +194,7 @@ routes.register(
   routeWithUserSession({
     path: "/dashboards",
     title: "Dashboards",
-    render: pageProps => <DashboardListPage {...pageProps} currentPage="all" />,
+    render: (pageProps) => <DashboardListPage {...pageProps} currentPage="all" />,
   })
 );
 routes.register(
@@ -189,7 +202,7 @@ routes.register(
   routeWithUserSession({
     path: "/dashboards/favorites",
     title: "Favorite Dashboards",
-    render: pageProps => <DashboardListPage {...pageProps} currentPage="favorites" />,
+    render: (pageProps) => <DashboardListPage {...pageProps} currentPage="favorites" orderByField="starred_at" />,
   })
 );
 routes.register(
@@ -197,6 +210,6 @@ routes.register(
   routeWithUserSession({
     path: "/dashboards/my",
     title: "My Dashboards",
-    render: pageProps => <DashboardListPage {...pageProps} currentPage="my" />,
+    render: (pageProps) => <DashboardListPage {...pageProps} currentPage="my" />,
   })
 );

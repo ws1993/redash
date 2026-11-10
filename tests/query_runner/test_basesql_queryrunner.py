@@ -1,11 +1,16 @@
 import unittest
+from unittest.mock import patch
 
-from redash.query_runner import BaseSQLQueryRunner, BaseQueryRunner
+import sqlparse
+from sqlparse.engine import grouping
+from sqlparse.exceptions import SQLParseError
+
+from redash import configure_sqlparse, settings
+from redash.query_runner import BaseQueryRunner, BaseSQLQueryRunner
 from redash.utils import gen_query_hash
 
 
 class TestBaseSQLQueryRunner(unittest.TestCase):
-
     def setUp(self):
         self.query_runner = BaseSQLQueryRunner({})
 
@@ -32,7 +37,7 @@ class TestBaseSQLQueryRunner(unittest.TestCase):
     def test_check_query_with_offset(self):
         query = "SELECT * LIMIT 5 OFFSET 3"
         self.assertEqual(False, self.query_runner.query_is_select_no_limit(query))
-    
+
     def test_add_limit_query_no_limit(self):
         query = "SELECT *"
         self.assertEqual("SELECT * LIMIT 1000", self.query_runner.add_limit_to_query(query))
@@ -62,9 +67,11 @@ class TestBaseSQLQueryRunner(unittest.TestCase):
         self.assertEqual(origin_query_text + " LIMIT 1000", query_text)
 
     def test_apply_auto_limit_non_select_query(self):
-        origin_query_text = ("create table execution_times as "
-                             "(select id, retrieved_at, data_source_id, query, runtime, query_hash "
-                             "from query_results order by 1 desc)")
+        origin_query_text = (
+            "create table execution_times as "
+            "(select id, retrieved_at, data_source_id, query, runtime, query_hash "
+            "from query_results order by 1 desc)"
+        )
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual(origin_query_text, query_text)
 
@@ -74,30 +81,29 @@ class TestBaseSQLQueryRunner(unittest.TestCase):
         self.assertEqual(origin_query_text, query_text)
 
     def test_apply_auto_limit_multi_query_add_limit_1(self):
-        origin_query_text = ("insert into execution_times (id, retrieved_at, data_source_id, query, runtime, query_hash) "
-                            "select id, retrieved_at, data_source_id, query, runtime, query_hash from query_results "
-                            "where id > (select max(id) from execution_times);\n"
-                            "select max(id), 'execution_times' as table_name from execution_times "
-                            "union all "
-                            "select max(id), 'query_results' as table_name from query_results")
+        origin_query_text = (
+            "insert into execution_times (id, retrieved_at, data_source_id, query, runtime, query_hash) "
+            "select id, retrieved_at, data_source_id, query, runtime, query_hash from query_results "
+            "where id > (select max(id) from execution_times);\n"
+            "select max(id), 'execution_times' as table_name from execution_times "
+            "union all "
+            "select max(id), 'query_results' as table_name from query_results"
+        )
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual(origin_query_text + " LIMIT 1000", query_text)
 
     def test_apply_auto_limit_multi_query_add_limit_2(self):
-        origin_query_text = "use database demo;\n" \
-                            "select * from data"
+        origin_query_text = "use database demo;\n" "select * from data"
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual(origin_query_text + " LIMIT 1000", query_text)
 
     def test_apply_auto_limit_multi_query_end_with_punc(self):
-        origin_query_text = ("select * from table1;\n"
-                             "select * from table2")
+        origin_query_text = "select * from table1;\n" "select * from table2"
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual("select * from table1;\nselect * from table2 LIMIT 1000", query_text)
 
     def test_apply_auto_limit_multi_query_last_not_select(self):
-        origin_query_text = ("select * from table1;\n"
-                             "CREATE TABLE Persons (PersonID int)")
+        origin_query_text = "select * from table1;\n" "CREATE TABLE Persons (PersonID int)"
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual(origin_query_text, query_text)
 
@@ -116,19 +122,65 @@ class TestBaseSQLQueryRunner(unittest.TestCase):
         query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
         self.assertEqual("select * from raw_events LIMIT 1000", query_text)
 
+    # Pin the limits so these tests do not depend on SQLPARSE_MAX_GROUPING_* in the
+    # environment running them.
+    @patch.multiple(grouping, MAX_GROUPING_TOKENS=100, MAX_GROUPING_DEPTH=10)
+    def test_apply_auto_limit_statement_too_large_to_group(self):
+        # sqlparse raises SQLParseError past its grouping limits. Run the query as the
+        # user wrote it rather than failing it.
+        origin_query_text = "select * from events where id in ({})".format(",".join(str(i) for i in range(100)))
+        query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
+        self.assertEqual(origin_query_text, query_text)
+
+    @patch.multiple(grouping, MAX_GROUPING_TOKENS=100, MAX_GROUPING_DEPTH=10)
+    def test_apply_auto_limit_statement_too_deeply_nested(self):
+        origin_query_text = "select {}1{}".format("(" * 20, ")" * 20)
+        query_text = self.query_runner.apply_auto_limit(origin_query_text, True)
+        self.assertEqual(origin_query_text, query_text)
+
     def test_gen_query_hash_baseSQL(self):
         origin_query_text = "select *"
         expected_query_text = "select * LIMIT 1000"
         base_runner = BaseQueryRunner({})
-        self.assertEqual(base_runner.gen_query_hash(expected_query_text),
-                         self.query_runner.gen_query_hash(origin_query_text, True))
+        self.assertEqual(
+            base_runner.gen_query_hash(expected_query_text), self.query_runner.gen_query_hash(origin_query_text, True)
+        )
 
     def test_gen_query_hash_NoneSQL(self):
         origin_query_text = "select *"
         base_runner = BaseQueryRunner({})
-        self.assertEqual(gen_query_hash(origin_query_text),
-                         base_runner.gen_query_hash(origin_query_text, True))
+        self.assertEqual(gen_query_hash(origin_query_text), base_runner.gen_query_hash(origin_query_text, True))
 
 
-if __name__ == '__main__':
+class TestSqlparseGroupingLimits(unittest.TestCase):
+    """configure_sqlparse() reaches into sqlparse.engine.grouping, so fail loudly here
+    rather than silently losing the limits if sqlparse renames those attributes."""
+
+    def setUp(self):
+        self.original = (grouping.MAX_GROUPING_TOKENS, grouping.MAX_GROUPING_DEPTH)
+
+    def tearDown(self):
+        grouping.MAX_GROUPING_TOKENS, grouping.MAX_GROUPING_DEPTH = self.original
+        configure_sqlparse()
+
+    def test_settings_are_applied(self):
+        with patch.multiple(settings, SQLPARSE_MAX_GROUPING_TOKENS=1234, SQLPARSE_MAX_GROUPING_DEPTH=56):
+            configure_sqlparse()
+            self.assertEqual(1234, grouping.MAX_GROUPING_TOKENS)
+            self.assertEqual(56, grouping.MAX_GROUPING_DEPTH)
+
+    def test_zero_disables_the_limit(self):
+        with patch.multiple(settings, SQLPARSE_MAX_GROUPING_TOKENS=0, SQLPARSE_MAX_GROUPING_DEPTH=0):
+            configure_sqlparse()
+            self.assertIsNone(grouping.MAX_GROUPING_TOKENS)
+            self.assertIsNone(grouping.MAX_GROUPING_DEPTH)
+
+    def test_limit_raises_sqlparse_error(self):
+        with patch.multiple(settings, SQLPARSE_MAX_GROUPING_TOKENS=100, SQLPARSE_MAX_GROUPING_DEPTH=100):
+            configure_sqlparse()
+            with self.assertRaises(SQLParseError):
+                sqlparse.parse("select * from events where id in ({})".format(",".join(str(i) for i in range(100))))
+
+
+if __name__ == "__main__":
     unittest.main()

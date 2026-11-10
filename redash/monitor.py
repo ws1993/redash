@@ -1,13 +1,11 @@
-from __future__ import absolute_import
-import itertools
 from funcy import flatten
-from sqlalchemy import union_all
-from redash import redis_connection, rq_redis_connection, __version__, settings
-from redash.models import db, DataSource, Query, QueryResult, Dashboard, Widget
-from redash.utils import json_loads
 from rq import Queue, Worker
 from rq.job import Job
 from rq.registry import StartedJobRegistry
+from sqlalchemy import text
+
+from redash import __version__, redis_connection, rq_redis_connection, settings
+from redash.models import Dashboard, Query, QueryResult, Widget, db
 
 
 def get_redis_status():
@@ -23,7 +21,7 @@ def get_object_counts():
     status["queries_count"] = Query.query.count()
     if settings.FEATURE_SHOW_QUERY_RESULTS_COUNT:
         status["query_results_count"] = QueryResult.query.count()
-        status["unused_query_results_count"] = QueryResult.unused().count()
+        status["unused_query_results_count"] = QueryResult.unused(settings.QUERY_RESULTS_CLEANUP_MAX_AGE).count()
     status["dashboards_count"] = Dashboard.query.count()
     status["widgets_count"] = Widget.query.count()
     return status
@@ -43,7 +41,7 @@ def get_db_sizes():
         ["Redash DB Size", "select pg_database_size(current_database()) as size"],
     ]
     for query_name, query in queries:
-        result = db.session.execute(query).first()
+        result = db.session.execute(text(query)).first()
         database_metrics.append([query_name, result[0]])
 
     return database_metrics
@@ -62,7 +60,7 @@ def get_status():
 
 
 def rq_job_ids():
-    queues = Queue.all(connection=redis_connection)
+    queues = Queue.all(connection=rq_redis_connection)
 
     started_jobs = [StartedJobRegistry(queue=q).get_job_ids() for q in queues]
     queued_jobs = [q.job_ids for q in queues]
@@ -92,7 +90,7 @@ def rq_queues():
             "started": fetch_jobs(StartedJobRegistry(queue=q).get_job_ids()),
             "queued": len(q.job_ids),
         }
-        for q in sorted(Queue.all(), key=lambda q: q.name)
+        for q in sorted(Queue.all(connection=rq_redis_connection), key=lambda q: q.name)
     }
 
 
@@ -115,7 +113,7 @@ def rq_workers():
             "failed_jobs": w.failed_job_count,
             "total_working_time": w.total_working_time,
         }
-        for w in Worker.all()
+        for w in Worker.all(connection=rq_redis_connection)
     ]
 
 

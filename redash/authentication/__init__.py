@@ -2,30 +2,30 @@ import hashlib
 import hmac
 import logging
 import time
+import unicodedata
 from datetime import timedelta
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
-from flask import jsonify, redirect, request, url_for, session
+from flask import jsonify, redirect, request, session, url_for
 from flask_login import LoginManager, login_user, logout_user, user_logged_in
+from sqlalchemy.orm.exc import NoResultFound
+from werkzeug.exceptions import Unauthorized
+
 from redash import models, settings
 from redash.authentication import jwt_auth
 from redash.authentication.org_resolving import current_org
 from redash.settings.organization import settings as org_settings
 from redash.tasks import record_event
-from sqlalchemy.orm.exc import NoResultFound
-from werkzeug.exceptions import Unauthorized
 
 login_manager = LoginManager()
 logger = logging.getLogger("authentication")
 
 
 def get_login_url(external=False, next="/"):
-    if settings.MULTI_ORG and current_org == None:
+    if settings.MULTI_ORG and current_org == None:  # noqa: E711
         login_url = "/"
     elif settings.MULTI_ORG:
-        login_url = url_for(
-            "redash.login", org_slug=current_org.slug, next=next, _external=external
-        )
+        login_url = url_for("redash.login", org_slug=current_org.slug, next=next, _external=external)
     else:
         login_url = url_for("redash.login", next=next, _external=external)
 
@@ -68,11 +68,7 @@ def request_loader(request):
     elif settings.AUTH_TYPE == "api_key":
         user = api_key_load_user_from_request(request)
     else:
-        logger.warning(
-            "Unknown authentication type ({}). Using default (HMAC).".format(
-                settings.AUTH_TYPE
-            )
-        )
+        logger.warning("Unknown authentication type ({}). Using default (HMAC).".format(settings.AUTH_TYPE))
         user = hmac_load_user_from_request(request)
 
     if org_settings["auth_jwt_login_enabled"] and user is None:
@@ -192,6 +188,10 @@ def jwt_token_load_user_from_request(request):
     if not payload:
         return
 
+    if "email" not in payload:
+        logger.info("No email field in token, refusing to login")
+        return
+
     try:
         user = models.User.get_by_email_and_org(payload["email"], org)
     except models.NoResultFound:
@@ -216,12 +216,9 @@ def log_user_logged_in(app, user):
 
 @login_manager.unauthorized_handler
 def redirect_to_login():
-    if request.is_xhr or "/api/" in request.path:
-        response = jsonify(
-            {"message": "Couldn't find resource. Please login and try again."}
-        )
-        response.status_code = 404
-        return response
+    is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if is_xhr or "/api/" in request.path:
+        return {"message": "Couldn't find resource. Please login and try again."}, 404
 
     login_url = get_login_url(next=request.url, external=False)
 
@@ -231,7 +228,7 @@ def redirect_to_login():
 def logout_and_redirect_to_index():
     logout_user()
 
-    if settings.MULTI_ORG and current_org == None:
+    if settings.MULTI_ORG and current_org == None:  # noqa: E711
         index_url = "/"
     elif settings.MULTI_ORG:
         index_url = url_for("redash.index", org_slug=current_org.slug, _external=False)
@@ -242,13 +239,9 @@ def logout_and_redirect_to_index():
 
 
 def init_app(app):
-    from redash.authentication import (
-        saml_auth,
-        remote_user_auth,
-        ldap_auth,
-    )
-
+    from redash.authentication import ldap_auth, remote_user_auth, saml_auth
     from redash.authentication.google_oauth import create_google_oauth_blueprint
+    from redash.authentication.oidc import create_oidc_blueprint
 
     login_manager.init_app(app)
     login_manager.anonymous_user = models.AnonymousUser
@@ -262,9 +255,16 @@ def init_app(app):
     from redash.security import csrf
 
     # Authlib's flask oauth client requires a Flask app to initialize
-    for blueprint in [create_google_oauth_blueprint(app), saml_auth.blueprint, remote_user_auth.blueprint, ldap_auth.blueprint, ]:
-        csrf.exempt(blueprint)
-        app.register_blueprint(blueprint)
+    for blueprint in [
+        create_google_oauth_blueprint(app),
+        create_oidc_blueprint(app),
+        saml_auth.blueprint,
+        remote_user_auth.blueprint,
+        ldap_auth.blueprint,
+    ]:
+        if blueprint:
+            csrf.exempt(blueprint)
+            app.register_blueprint(blueprint)
 
     user_logged_in.connect(log_user_logged_in)
     login_manager.request_loader(request_loader)
@@ -278,7 +278,7 @@ def create_and_login_user(org, name, email, picture=None):
         if user_object.is_invitation_pending:
             user_object.is_invitation_pending = False
             models.db.session.commit()
-        if user_object.name != name:
+        if name and user_object.name != name:
             logger.debug("Updating user name (%r -> %r)", user_object.name, name)
             user_object.name = name
             models.db.session.commit()
@@ -286,7 +286,7 @@ def create_and_login_user(org, name, email, picture=None):
         logger.debug("Creating user object (%r)", name)
         user_object = models.User(
             org=org,
-            name=name,
+            name=name if name else email,
             email=email,
             is_invitation_pending=False,
             _profile_image_url=picture,
@@ -300,20 +300,75 @@ def create_and_login_user(org, name, email, picture=None):
     return user_object
 
 
+def _is_safe_next_url(url):
+    """Validate that a redirect URL is safe (on-site only).
+
+    Adapted from Django's url_has_allowed_host_and_scheme().
+    Rejects any URL that would redirect to an external host.
+    """
+    if not url:
+        return False
+
+    url = url.strip()
+    if not url:
+        return False
+
+    # Reject URLs with leading control characters (browsers silently strip them)
+    if unicodedata.category(url[0])[0] == "C":
+        return False
+
+    # Chrome treats \ as / in URLs, so check both the original and
+    # backslash-normalized versions to prevent bypasses like \/evil.com
+    for test_url in (url, url.replace("\\", "/")):
+        # Chrome treats any URL with three or more slashes as absolute
+        if test_url.startswith("///"):
+            return False
+
+        try:
+            parsed = urlparse(test_url)
+        except ValueError:
+            return False
+
+        # Reject scheme-without-netloc (e.g. http:///evil.com)
+        if parsed.scheme and not parsed.netloc:
+            return False
+
+        # Reject any URL with a netloc (external host)
+        if parsed.netloc:
+            return False
+
+        # Only allow http(s) schemes or no scheme at all
+        if parsed.scheme and parsed.scheme not in ("http", "https"):
+            return False
+
+    return True
+
+
 def get_next_path(unsafe_next_path):
     if not unsafe_next_path:
         return ""
 
-    # Preventing open redirection attacks
+    if _is_safe_next_url(unsafe_next_path):
+        return unsafe_next_path
+
+    # For http(s) URLs with a netloc, extract the path component.
+    # This handles legitimate cases like "https://myredash.com/queries/5"
+    # or "//localhost/queries" where the path component is safe.
+    # All other unsafe URLs (non-http schemes, scheme-without-netloc, etc.)
+    # are rejected outright.
     parts = list(urlsplit(unsafe_next_path))
-    parts[0] = ""  # clear scheme
-    parts[1] = ""  # clear netloc
-    safe_next_path = urlunsplit(parts)
+    scheme = parts[0].lower() if parts[0] else ""
+    has_netloc = bool(parts[1])
 
-    # If the original path was a URL, we might end up with an empty
-    # safe url, which will redirect to the login page. Changing to
-    # relative root to redirect to the app root after login.
-    if not safe_next_path:
-        safe_next_path = "./"
+    if scheme and scheme not in ("http", "https"):
+        return "./"
 
-    return safe_next_path
+    if not has_netloc:
+        return "./"
+
+    safe_next_path = urlunsplit(["", "", parts[2], parts[3], parts[4]])
+
+    if safe_next_path and _is_safe_next_url(safe_next_path):
+        return safe_next_path
+
+    return "./"

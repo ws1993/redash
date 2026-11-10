@@ -1,9 +1,12 @@
-from tests import BaseTestCase
-from redash import models
-from redash.models import db
+from unittest.mock import patch
 
-from redash.serializers import serialize_query
+from sqlparse.engine import grouping
+
+from redash import models
+from redash.models import ApiKey, db
 from redash.permissions import ACCESS_TYPE_MODIFY
+from redash.serializers import serialize_query
+from tests import BaseTestCase
 
 
 class TestQueryResourceGet(BaseTestCase):
@@ -33,9 +36,7 @@ class TestQueryResourceGet(BaseTestCase):
         rv = self.make_request("get", "/api/queries/{}".format(query.id))
         self.assertEqual(rv.status_code, 403)
 
-        rv = self.make_request(
-            "get", "/api/queries/{}".format(query.id), user=self.factory.create_admin()
-        )
+        rv = self.make_request("get", "/api/queries/{}".format(query.id), user=self.factory.create_admin())
         self.assertEqual(rv.status_code, 200)
 
     def test_query_only_accessible_to_users_from_its_organization(self):
@@ -46,14 +47,10 @@ class TestQueryResourceGet(BaseTestCase):
         query.data_source = None
         db.session.add(query)
 
-        rv = self.make_request(
-            "get", "/api/queries/{}".format(query.id), user=second_org_admin
-        )
+        rv = self.make_request("get", "/api/queries/{}".format(query.id), user=second_org_admin)
         self.assertEqual(rv.status_code, 404)
 
-        rv = self.make_request(
-            "get", "/api/queries/{}".format(query.id), user=self.factory.create_admin()
-        )
+        rv = self.make_request("get", "/api/queries/{}".format(query.id), user=self.factory.create_admin())
         self.assertEqual(rv.status_code, 200)
 
     def test_query_search(self):
@@ -66,7 +63,7 @@ class TestQueryResourceGet(BaseTestCase):
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(len(rv.json["results"]), 1)
 
-        rv = self.make_request("get", "/api/queries?q=better OR faster")
+        rv = self.make_request("get", "/api/queries?q=better or faster")
 
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(len(rv.json["results"]), 2)
@@ -76,9 +73,7 @@ class TestQueryResourceGet(BaseTestCase):
         self.assertEqual(rv.status_code, 301)
         self.assertIn("/api/queries?q=stronger", rv.headers["Location"])
 
-        rv = self.make_request(
-            "get", "/api/queries/search?q=stronger", follow_redirects=True
-        )
+        rv = self.make_request("get", "/api/queries/search?q=stronger", follow_redirects=True)
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(len(rv.json["results"]), 1)
 
@@ -98,9 +93,7 @@ class TestQueryResourcePost(BaseTestCase):
             "data_source_id": new_ds.id,
         }
 
-        rv = self.make_request(
-            "post", "/api/queries/{0}".format(query.id), data=data, user=admin
-        )
+        rv = self.make_request("post", "/api/queries/{0}".format(query.id), data=data, user=admin)
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(rv.json["name"], data["name"])
         self.assertEqual(rv.json["last_modified_by"]["id"], admin.id)
@@ -162,15 +155,11 @@ class TestQueryResourcePost(BaseTestCase):
         self.assertEqual(rv.status_code, 200)
 
     def test_prevents_association_with_unauthorized_dropdown_queries(self):
-        other_data_source = self.factory.create_data_source(
-            group=self.factory.create_group()
-        )
+        other_data_source = self.factory.create_data_source(group=self.factory.create_group())
         other_query = self.factory.create_query(data_source=other_data_source)
         db.session.add(other_query)
 
-        my_data_source = self.factory.create_data_source(
-            group=self.factory.create_group()
-        )
+        my_data_source = self.factory.create_data_source(group=self.factory.create_group())
         my_query = self.factory.create_query(data_source=my_data_source)
         db.session.add(my_query)
 
@@ -185,9 +174,7 @@ class TestQueryResourcePost(BaseTestCase):
         self.assertEqual(rv.status_code, 403)
 
     def test_prevents_association_with_non_existing_dropdown_queries(self):
-        my_data_source = self.factory.create_data_source(
-            group=self.factory.create_group()
-        )
+        my_data_source = self.factory.create_data_source(group=self.factory.create_group())
         my_query = self.factory.create_query(data_source=my_data_source)
         db.session.add(my_query)
 
@@ -226,9 +213,7 @@ class TestQueryResourcePost(BaseTestCase):
         )
         self.assertEqual(rv.status_code, 403)
 
-        models.AccessPermission.grant(
-            obj=query, access_type=ACCESS_TYPE_MODIFY, grantee=user, grantor=query.user
-        )
+        models.AccessPermission.grant(obj=query, access_type=ACCESS_TYPE_MODIFY, grantee=user, grantor=query.user)
 
         rv = self.make_request(
             "post",
@@ -250,9 +235,7 @@ class TestQueryListResourceGet(BaseTestCase):
         rv = self.make_request("get", "/api/queries")
 
         assert len(rv.json["results"]) == 3
-        assert set([result["id"] for result in rv.json["results"]]) == set(
-            [q1.id, q2.id, q3.id]
-        )
+        assert set([result["id"] for result in rv.json["results"]]) == {q1.id, q2.id, q3.id}
 
     def test_filters_with_tags(self):
         q1 = self.factory.create_query(tags=["test"])
@@ -261,7 +244,7 @@ class TestQueryListResourceGet(BaseTestCase):
 
         rv = self.make_request("get", "/api/queries?tags=test")
         assert len(rv.json["results"]) == 1
-        assert set([result["id"] for result in rv.json["results"]]) == set([q1.id])
+        assert set([result["id"] for result in rv.json["results"]]) == {q1.id}
 
     def test_search_term(self):
         q1 = self.factory.create_query(name="Sales")
@@ -270,9 +253,7 @@ class TestQueryListResourceGet(BaseTestCase):
 
         rv = self.make_request("get", "/api/queries?q=sales")
         assert len(rv.json["results"]) == 2
-        assert set([result["id"] for result in rv.json["results"]]) == set(
-            [q1.id, q2.id]
-        )
+        assert set([result["id"] for result in rv.json["results"]]) == {q1.id, q2.id}
 
 
 class TestQueryListResourcePost(BaseTestCase):
@@ -287,7 +268,7 @@ class TestQueryListResourcePost(BaseTestCase):
         rv = self.make_request("post", "/api/queries", data=query_data)
 
         self.assertEqual(rv.status_code, 200)
-        self.assertDictContainsSubset(query_data, rv.json)
+        self.assertLessEqual(query_data.items(), rv.json.items())
         self.assertEqual(rv.json["user"]["id"], self.factory.user.id)
         self.assertIsNotNone(rv.json["api_key"])
         self.assertIsNotNone(rv.json["query_hash"])
@@ -319,15 +300,11 @@ class TestQueryListResourcePost(BaseTestCase):
         self.assertEqual(rv.status_code, 200)
 
     def test_prevents_association_with_unauthorized_dropdown_queries(self):
-        other_data_source = self.factory.create_data_source(
-            group=self.factory.create_group()
-        )
+        other_data_source = self.factory.create_data_source(group=self.factory.create_group())
         other_query = self.factory.create_query(data_source=other_data_source)
         db.session.add(other_query)
 
-        my_data_source = self.factory.create_data_source(
-            group=self.factory.create_group()
-        )
+        my_data_source = self.factory.create_data_source(group=self.factory.create_group())
 
         query_data = {
             "name": "Testing",
@@ -362,9 +339,7 @@ class TestQueryArchiveResourceGet(BaseTestCase):
         rv = self.make_request("get", "/api/queries/archive")
 
         assert len(rv.json["results"]) == 2
-        assert set([result["id"] for result in rv.json["results"]]) == set(
-            [q1.id, q2.id]
-        )
+        assert set([result["id"] for result in rv.json["results"]]) == {q1.id, q2.id}
 
     def test_search_term(self):
         q1 = self.factory.create_query(name="Sales", is_archived=True)
@@ -373,9 +348,7 @@ class TestQueryArchiveResourceGet(BaseTestCase):
 
         rv = self.make_request("get", "/api/queries/archive?q=sales")
         assert len(rv.json["results"]) == 2
-        assert set([result["id"] for result in rv.json["results"]]) == set(
-            [q1.id, q2.id]
-        )
+        assert set([result["id"] for result in rv.json["results"]]) == {q1.id, q2.id}
 
 
 class QueryRefreshTest(BaseTestCase):
@@ -412,9 +385,7 @@ class QueryRefreshTest(BaseTestCase):
         self.assertEqual(403, response.status_code)
 
     def test_refresh_forbiden_with_query_api_key(self):
-        response = self.make_request(
-            "post", "{}?api_key={}".format(self.path, self.query.api_key), user=False
-        )
+        response = self.make_request("post", "{}?api_key={}".format(self.path, self.query.api_key), user=False)
         self.assertEqual(403, response.status_code)
 
         response = self.make_request(
@@ -479,20 +450,30 @@ class TestQueryRegenerateApiKey(BaseTestCase):
         query = self.factory.create_query(user=user)
         orig_api_key = query.api_key
 
-        rv = self.make_request(
-            "post", "/api/queries/{}/regenerate_api_key".format(query.id), user=user
-        )
+        rv = self.make_request("post", "/api/queries/{}/regenerate_api_key".format(query.id), user=user)
         self.assertEqual(rv.status_code, 200)
 
         updated_query = models.Query.query.get(query.id)
         self.assertNotEqual(orig_api_key, updated_query.api_key)
 
 
+class TestQueryResourceGetWithDashboardApiKey(BaseTestCase):
+    def test_does_not_return_query_api_key(self):
+        query = self.factory.create_query()
+        visualization = self.factory.create_visualization(query_rel=query)
+        widget = self.factory.create_widget(visualization=visualization)
+        api_key = ApiKey.create_for_object(widget.dashboard, self.factory.user)
+        db.session.commit()
+
+        rv = self.make_request("get", "/api/queries/{}?api_key={}".format(query.id, api_key.api_key), user=False)
+
+        self.assertEqual(rv.status_code, 200)
+        self.assertIsNone(rv.json["api_key"])
+
+
 class TestQueryForkResourcePost(BaseTestCase):
     def test_forks_a_query(self):
-        ds = self.factory.create_data_source(
-            group=self.factory.org.default_group, view_only=False
-        )
+        ds = self.factory.create_data_source(group=self.factory.org.default_group, view_only=False)
         query = self.factory.create_query(data_source=ds)
 
         rv = self.make_request("post", "/api/queries/{}/fork".format(query.id))
@@ -500,9 +481,7 @@ class TestQueryForkResourcePost(BaseTestCase):
         self.assertEqual(rv.status_code, 200)
 
     def test_must_have_full_access_to_data_source(self):
-        ds = self.factory.create_data_source(
-            group=self.factory.org.default_group, view_only=True
-        )
+        ds = self.factory.create_data_source(group=self.factory.org.default_group, view_only=True)
         query = self.factory.create_query(data_source=ds)
 
         rv = self.make_request("post", "/api/queries/{}/fork".format(query.id))
@@ -521,8 +500,28 @@ FROM foobar
 WHERE x=1
   AND y=2;"""
 
-        rv = self.make_request(
-            "post", "/api/queries/format", user=admin, data={"query": query}
-        )
+        rv = self.make_request("post", "/api/queries/format", user=admin, data={"query": query})
 
         self.assertEqual(rv.json["query"], expected)
+
+    # Pin the limits so these tests do not depend on SQLPARSE_MAX_GROUPING_* in the
+    # environment running them.
+    @patch.multiple(grouping, MAX_GROUPING_TOKENS=100, MAX_GROUPING_DEPTH=10)
+    def test_format_sql_query_too_large_to_group(self):
+        admin = self.factory.create_admin()
+        # sqlparse raises SQLParseError past its grouping limits rather than spending
+        # unbounded CPU on a single statement. Answer 400 instead of failing the request.
+        query = "SELECT * FROM events WHERE id IN ({})".format(",".join(str(i) for i in range(100)))
+
+        rv = self.make_request("post", "/api/queries/format", user=admin, data={"query": query})
+
+        self.assertEqual(rv.status_code, 400)
+
+    @patch.multiple(grouping, MAX_GROUPING_TOKENS=100, MAX_GROUPING_DEPTH=10)
+    def test_format_sql_query_too_deeply_nested(self):
+        admin = self.factory.create_admin()
+        query = "SELECT {}1{}".format("(" * 20, ")" * 20)
+
+        rv = self.make_request("post", "/api/queries/format", user=admin, data={"query": query})
+
+        self.assertEqual(rv.status_code, 400)

@@ -1,23 +1,25 @@
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy_utils.models import generic_repr
 
 from redash.settings.organization import settings as org_settings
 
-from .base import db, Column, primary_key
+from .base import Column, db, primary_key
 from .mixins import TimestampMixin
-from .types import MutableDict, PseudoJSON
-from .users import User, Group
+from .types import MutableDict
+from .users import Group, User
 
 
 @generic_repr("id", "name", "slug")
 class Organization(TimestampMixin, db.Model):
     SETTING_GOOGLE_APPS_DOMAINS = "google_apps_domains"
     SETTING_IS_PUBLIC = "is_public"
+    SETTING_OIDC_DOMAINS = "oidc_domains"
 
     id = primary_key("Organization")
     name = Column(db.String(255))
     slug = Column(db.String(255), unique=True)
-    settings = Column(MutableDict.as_mutable(PseudoJSON))
+    settings = Column(MutableDict.as_mutable(JSONB), default={})
     groups = db.relationship("Group", lazy="dynamic")
     events = db.relationship("Event", lazy="dynamic", order_by="desc(Event.created_at)")
 
@@ -36,13 +38,15 @@ class Organization(TimestampMixin, db.Model):
 
     @property
     def default_group(self):
-        return self.groups.filter(
-            Group.name == "default", Group.type == Group.BUILTIN_GROUP
-        ).first()
+        return self.groups.filter(Group.name == "default", Group.type == Group.BUILTIN_GROUP).first()
 
     @property
     def google_apps_domains(self):
         return self.settings.get(self.SETTING_GOOGLE_APPS_DOMAINS, [])
+
+    @property
+    def oidc_domains(self):
+        return self.settings.get(self.SETTING_OIDC_DOMAINS, [])
 
     @property
     def is_public(self):
@@ -80,9 +84,7 @@ class Organization(TimestampMixin, db.Model):
 
     @property
     def admin_group(self):
-        return self.groups.filter(
-            Group.name == "admin", Group.type == Group.BUILTIN_GROUP
-        ).first()
+        return self.groups.filter(Group.name == "admin", Group.type == Group.BUILTIN_GROUP).first()
 
     def has_user(self, email):
         return self.users.filter(User.email == email).count() == 1

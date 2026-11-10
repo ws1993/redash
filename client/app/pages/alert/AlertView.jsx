@@ -47,7 +47,6 @@ AlertState.defaultProps = {
   lastTriggered: null,
 };
 
-// eslint-disable-next-line react/prefer-stateless-function
 export default class AlertView extends React.Component {
   state = {
     unmuting: false,
@@ -68,13 +67,23 @@ export default class AlertView extends React.Component {
       <>
         <Title name={name} alert={alert}>
           <DynamicComponent name="AlertView.HeaderExtra" alert={alert} />
-          <Tooltip title={canEdit ? "" : "You do not have sufficient permissions to edit this alert"}>
-            <Button type="default" onClick={canEdit ? onEdit : null} className={cx({ disabled: !canEdit })}>
-              <i className="fa fa-edit m-r-5" aria-hidden="true" />
-              Edit
-            </Button>
-            {menuButton}
-          </Tooltip>
+          {canEdit ? (
+            <>
+              <Button type="default" onClick={canEdit ? onEdit : null} className={cx({ disabled: !canEdit })}>
+                <i className="fa fa-edit m-r-5" aria-hidden="true" />
+                Edit
+              </Button>
+              {menuButton}
+            </>
+          ) : (
+            <Tooltip title="You do not have sufficient permissions to edit this alert">
+              <Button type="default" onClick={canEdit ? onEdit : null} className={cx({ disabled: !canEdit })}>
+                <i className="fa fa-edit m-r-5" aria-hidden="true" />
+                Edit
+              </Button>
+              {menuButton}
+            </Tooltip>
+          )}
         </Title>
         <div className="bg-white tiled p-20">
           <Grid.Row type="flex" gutter={16}>
@@ -126,7 +135,8 @@ export default class AlertView extends React.Component {
                             type="primary"
                             onClick={this.unmute}
                             loading={this.state.unmuting}
-                            className="m-t-5 m-l-5">
+                            className="m-t-5 m-l-5"
+                          >
                             Unmute
                           </Button>
                         </>
@@ -156,7 +166,7 @@ export default class AlertView extends React.Component {
 
 AlertView.propTypes = {
   alert: AlertType.isRequired,
-  queryResult: PropTypes.object, // eslint-disable-line react/forbid-prop-types,
+  queryResult: PropTypes.object,
   canEdit: PropTypes.bool.isRequired,
   onEdit: PropTypes.func.isRequired,
   menuButton: PropTypes.node.isRequired,

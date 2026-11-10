@@ -32,7 +32,6 @@ export const TYPES = mapValues(
       "/data-sources/querying-a-google-spreadsheet",
       "Guide: Help Setting up Google Spreadsheets",
     ],
-    DS_GOOGLE_ANALYTICS: ["/data-sources/google-analytics-setup", "Guide: Help Setting up Google Analytics"],
     DS_AXIBASETSD: ["/data-sources/axibase-time-series-database", "Guide: Help Setting up Axibase Time Series"],
     DS_RESULTS: ["/user-guide/querying/query-results-data-source", "Guide: Help Setting up Query Results"],
     ALERT_SETUP: ["/user-guide/alerts/setting-up-an-alert", "Guide: Setting Up a New Alert"],
@@ -101,7 +100,7 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
       clearTimeout(this.iframeLoadingTimeout);
     }
 
-    loadIframe = url => {
+    loadIframe = (url) => {
       clearTimeout(this.iframeLoadingTimeout);
       this.setState({ loading: true, error: false });
 
@@ -116,8 +115,8 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
       clearTimeout(this.iframeLoadingTimeout);
     };
 
-    onPostMessageReceived = event => {
-      if (!some(allowedDomains, domain => startsWith(event.origin, domain))) {
+    onPostMessageReceived = (event) => {
+      if (!some(allowedDomains, (domain) => startsWith(event.origin, domain))) {
         return;
       }
 
@@ -134,7 +133,7 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
       return helpTriggerType ? helpTriggerType[0] : this.props.href;
     };
 
-    openDrawer = e => {
+    openDrawer = (e) => {
       // keep "open in new tab" behavior
       if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
@@ -144,7 +143,7 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
       }
     };
 
-    closeDrawer = event => {
+    closeDrawer = (event) => {
       if (event) {
         event.preventDefault();
       }
@@ -161,7 +160,7 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
       const tooltip = get(types, `${this.props.type}[1]`, this.props.title);
       const className = cx("help-trigger", this.props.className);
       const url = this.state.currentUrl;
-      const isAllowedDomain = some(allowedDomains, domain => startsWith(url || targetUrl, domain));
+      const isAllowedDomain = some(allowedDomains, (domain) => startsWith(url || targetUrl, domain));
       const shouldRenderAsLink = this.props.renderAsLink || !isAllowedDomain;
 
       return (
@@ -180,13 +179,15 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
                   )}
                 </>
               ) : null
-            }>
+            }
+          >
             <Link
               href={url || this.getUrl()}
               className={className}
               rel="noopener noreferrer"
               target="_blank"
-              onClick={shouldRenderAsLink ? () => {} : this.openDrawer}>
+              onClick={shouldRenderAsLink ? () => {} : this.openDrawer}
+            >
               {this.props.children}
             </Link>
           </Tooltip>
@@ -197,12 +198,12 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
             visible={this.state.visible}
             className={cx("help-drawer", drawerClassName)}
             destroyOnClose
-            width={400}>
+            width={400}
+          >
             <div className="drawer-wrapper">
               <div className="drawer-menu">
                 {url && (
                   <Tooltip title="Open page in a new window" placement="left">
-                    {/* eslint-disable-next-line react/jsx-no-target-blank */}
                     <Link href={url} target="_blank">
                       <i className="fa fa-external-link" aria-hidden="true" />
                       <span className="sr-only">(opens in a new tab)</span>
@@ -237,7 +238,6 @@ export function helpTriggerWithTypes(types, allowedDomains = [], drawerClassName
                 <BigMessage icon="fa-exclamation-circle" className="help-message">
                   Something went wrong.
                   <br />
-                  {/* eslint-disable-next-line react/jsx-no-target-blank */}
                   <Link href={this.state.error} target="_blank" rel="noopener">
                     Click here
                   </Link>{" "}

@@ -17,6 +17,7 @@ client/dist
 _build
 .vscode
 .env
+.tool-versions
 
 dump.rdb
 
@@ -25,5 +26,5 @@ node_modules
 .sass-cache
 npm-debug.log
 
-client/cypress/screenshots
-client/cypress/videos
+client/visual-tests/.results
+client/e2e/.results

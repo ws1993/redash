@@ -29,17 +29,33 @@ def parse_boolean(s):
     else:
         raise ValueError("Invalid boolean value %r" % s)
 
+
 def cast_int_or_default(val, default=None):
     try:
         return int(val)
     except (ValueError, TypeError):
         return default
 
+
 def int_or_none(value):
     if value is None:
         return value
 
     return int(value)
+
+
+def parse_samesite(value, secure):
+    """Normalize a SameSite cookie setting; an empty value means no SameSite attribute."""
+    if not value:
+        return None
+
+    samesite = value.capitalize()
+    if samesite not in ("Lax", "Strict", "None"):
+        raise ValueError(f"Invalid SameSite value {value!r}. Use Lax, Strict or None.")
+    if samesite == "None" and not secure:
+        # Browsers reject SameSite=None cookies that aren't Secure.
+        raise ValueError("SameSite=None requires the cookie to be secure.")
+    return samesite
 
 
 def add_decode_responses_to_redis_url(url):

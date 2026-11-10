@@ -1,16 +1,12 @@
-import os
 import datetime
 import logging
-from unittest import TestCase
+import os
 from contextlib import contextmanager
+from unittest import TestCase
 
-os.environ["REDASH_REDIS_URL"] = os.environ.get(
-    "REDASH_REDIS_URL", "redis://localhost:6379/0"
-).replace("/0", "/5")
+os.environ["REDASH_REDIS_URL"] = os.environ.get("REDASH_REDIS_URL", "redis://localhost:6379/0").replace("/0", "/5")
 # Use different url for RQ to avoid DB being cleaned up:
-os.environ["RQ_REDIS_URL"] = os.environ.get(
-    "REDASH_REDIS_URL", "redis://localhost:6379/0"
-).replace("/5", "/6")
+os.environ["RQ_REDIS_URL"] = os.environ.get("REDASH_REDIS_URL", "redis://localhost:6379/0").replace("/5", "/6")
 
 # Dummy values for oauth login
 os.environ["REDASH_GOOGLE_CLIENT_ID"] = "dummy"
@@ -22,20 +18,32 @@ os.environ["REDASH_RATELIMIT_ENABLED"] = "true"
 
 os.environ["REDASH_ENFORCE_CSRF"] = "false"
 
-from redash import limiter, redis_connection
-from redash.app import create_app
-from redash.models import db
-from redash.utils import json_dumps, json_loads
-from tests.factories import Factory, user_factory
+from flask import g, has_app_context  # noqa: E402
+from flask.testing import FlaskClient  # noqa: E402
 
+from redash import limiter, redis_connection  # noqa: E402
+from redash.app import create_app  # noqa: E402
+from redash.models import db  # noqa: E402
+from redash.utils import json_dumps  # noqa: E402
+from tests.factories import Factory, user_factory  # noqa: E402
 
 logging.disable(logging.INFO)
 logging.getLogger("metrics").setLevel(logging.ERROR)
 
 
+class TestClient(FlaskClient):
+    def open(self, *args, **kwargs):
+        # Flask-Login caches the loaded user on `g`, which lives in the app context. Tests
+        # keep one app context pushed for their whole duration, so every request would
+        # otherwise reuse the user loaded by the first one.
+        if has_app_context():
+            g.pop("_login_user", None)
+        return super().open(*args, **kwargs)
+
+
 def authenticate_request(c, user):
     with c.session_transaction() as sess:
-        sess["user_id"] = user.get_id()
+        sess["_user_id"] = user.get_id()
 
 
 @contextmanager
@@ -53,6 +61,7 @@ class BaseTestCase(TestCase):
         self.app = create_app()
         self.db = db
         self.app.config["TESTING"] = True
+        self.app.test_client_class = TestClient
         limiter.enabled = False
         self.app_ctx = self.app.app_context()
         self.app_ctx.push()
@@ -64,7 +73,7 @@ class BaseTestCase(TestCase):
 
     def tearDown(self):
         db.session.remove()
-        db.get_engine(self.app).dispose()
+        db.engine.dispose()
         self.app_ctx.pop()
         redis_connection.flushdb()
 
@@ -110,11 +119,13 @@ class BaseTestCase(TestCase):
         )
         return response
 
-    def get_request(self, path, org=None, headers=None):
+    def get_request(self, path, org=None, headers=None, client=None):
         if org:
             path = "/{}{}".format(org.slug, path)
 
-        return self.client.get(path, headers=headers)
+        if client is None:
+            client = self.client
+        return client.get(path, headers=headers)
 
     def post_request(self, path, data=None, org=None, headers=None):
         if org:
@@ -124,9 +135,7 @@ class BaseTestCase(TestCase):
 
     def assertResponseEqual(self, expected, actual):
         for k, v in expected.items():
-            if isinstance(v, datetime.datetime) or isinstance(
-                actual[k], datetime.datetime
-            ):
+            if isinstance(v, datetime.datetime) or isinstance(actual[k], datetime.datetime):
                 continue
 
             if isinstance(v, list):

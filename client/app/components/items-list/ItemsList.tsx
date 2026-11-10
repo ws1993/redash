@@ -1,4 +1,4 @@
-import { omit, debounce } from "lodash";
+import { omit, debounce, isEqual, pick } from "lodash";
 import React from "react";
 import PropTypes from "prop-types";
 import hoistNonReactStatics from "hoist-non-react-statics";
@@ -10,6 +10,10 @@ export interface PaginationOptions {
   itemsPerPage?: number;
 }
 
+export interface SearchOptions {
+  isServerSideFTS?: boolean;
+}
+
 export interface Controller<I, P = any> {
   params: P; // TODO: Find out what params is (except merging with props)
 
@@ -18,7 +22,8 @@ export interface Controller<I, P = any> {
 
   // search
   searchTerm?: string;
-  updateSearch: (searchTerm: string) => void;
+  searchInputVersion: number;
+  updateSearch: (searchTerm: string, searchOptions?: SearchOptions) => void;
 
   // tags
   selectedTags: string[];
@@ -28,6 +33,7 @@ export interface Controller<I, P = any> {
   orderByField?: string;
   orderByReverse: boolean;
   toggleSorting: (orderByField: string) => void;
+  setSorting: (orderByField: string, orderByReverse: boolean) => void;
 
   // pagination
   page: number;
@@ -49,6 +55,7 @@ export const ControllerType = PropTypes.shape({
 
   // search
   searchTerm: PropTypes.string,
+  searchInputVersion: PropTypes.number.isRequired,
   updateSearch: PropTypes.func.isRequired, // (searchTerm: string) => void
 
   // tags
@@ -88,15 +95,24 @@ type StateStorage = any; // TODO: Type StateStore
 
 export interface ItemsListWrappedComponentProps<I, P = any> {
   controller: Controller<I, P>;
+  children?: React.ReactNode;
 }
 
 export function wrap<I, P = any>(
   WrappedComponent: React.ComponentType<ItemsListWrappedComponentProps<I>>,
   createItemsSource: () => ItemsSource,
-  createStateStorage: () => StateStorage
+  createStateStorage: ({ ...props }) => StateStorage
 ) {
   class ItemsListWrapper extends React.Component<ItemsListWrapperProps, ItemsListWrapperState<I, P>> {
     private _itemsSource: ItemsSource;
+
+    private _stateStorage: StateStorage;
+
+    private _unlisten?: () => void;
+
+    private _cancelPendingSearch: () => void;
+
+    private _searchInputVersion = 0;
 
     static propTypes = {
       onError: PropTypes.func,
@@ -116,7 +132,8 @@ export function wrap<I, P = any>(
     constructor(props: ItemsListWrapperProps) {
       super(props);
 
-      const stateStorage = createStateStorage();
+      const stateStorage = createStateStorage({ ...props });
+      this._stateStorage = stateStorage;
       const itemsSource = createItemsSource();
       this._itemsSource = itemsSource;
 
@@ -134,37 +151,76 @@ export function wrap<I, P = any>(
         this.setState(this.getState({ ...state, isLoaded: true }));
       };
 
-      itemsSource.onError = (error: GenericItemSourceError) =>
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        this.props.onError!(error);
+      itemsSource.onError = (error: GenericItemSourceError) => this.props.onError!(error);
 
       const initialState = this.getState({ ...itemsSource.getState(), isLoaded: false });
-      const { updatePagination, toggleSorting, updateSearch, updateSelectedTags, update, handleError } = itemsSource;
+      const { updatePagination, toggleSorting, setSorting, updateSearch, updateSelectedTags, update, handleError } =
+        itemsSource;
+
+      let isRunningUpdateSearch = false;
+      let pendingUpdateSearchParams: any[] | null = null;
+      const debouncedUpdateSearch = debounce(async (...params) => {
+        // Avoid running multiple updateSerch concurrently.
+        // If an updateSearch is already running, we save the params for the latest call.
+        // When the current updateSearch is finished, we call debouncedUpdateSearch again with the saved params.
+        if (isRunningUpdateSearch) {
+          pendingUpdateSearchParams = params;
+          return;
+        }
+        isRunningUpdateSearch = true;
+        await updateSearch(...params);
+        isRunningUpdateSearch = false;
+        if (pendingUpdateSearchParams) {
+          const pendingParams = pendingUpdateSearchParams;
+          pendingUpdateSearchParams = null;
+          debouncedUpdateSearch(...pendingParams);
+        }
+      }, 200);
+
+      this._cancelPendingSearch = () => {
+        debouncedUpdateSearch.cancel();
+        pendingUpdateSearchParams = null;
+      };
+
       this.state = {
         ...initialState,
-        toggleSorting, // eslint-disable-line react/no-unused-state
-        updateSearch: debounce(updateSearch, 200), // eslint-disable-line react/no-unused-state
-        updateSelectedTags, // eslint-disable-line react/no-unused-state
-        updatePagination, // eslint-disable-line react/no-unused-state
-        update, // eslint-disable-line react/no-unused-state
-        handleError, // eslint-disable-line react/no-unused-state
+        toggleSorting,
+        setSorting,
+        updateSearch: debouncedUpdateSearch,
+        updateSelectedTags,
+        updatePagination,
+        update,
+        handleError,
       };
     }
 
     componentDidMount() {
+      this._unlisten = this._stateStorage.listen((state: Record<string, unknown>) => {
+        const currentState = pick(this._itemsSource.getState(), Object.keys(state));
+        // Relevance ordering has no direction, even if the previous sort was descending.
+        if (!state.orderByField && !currentState.orderByField) {
+          currentState.orderByReverse = state.orderByReverse;
+        }
+        // Ignore our own URL writes and changes to unrelated URL parameters.
+        if (!isEqual(currentState, state)) {
+          this._cancelPendingSearch();
+          // Reset the input draft even when navigation restores the same search term.
+          this._searchInputVersion += 1;
+          this._itemsSource.setState({ ...state, validate: false });
+          this._itemsSource.update();
+        }
+      });
       this.state.update();
     }
 
     componentWillUnmount() {
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      this._unlisten?.();
+      this._cancelPendingSearch();
       this._itemsSource.onBeforeUpdate = () => {};
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
       this._itemsSource.onAfterUpdate = () => {};
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
       this._itemsSource.onError = () => {};
     }
 
-    // eslint-disable-next-line class-methods-use-this
     getState({
       isLoaded,
       totalCount,
@@ -174,6 +230,7 @@ export function wrap<I, P = any>(
     }: ItemsListWrapperState<I, P>): ItemsListWrapperState<I, P> {
       return {
         ...rest,
+        searchInputVersion: this._searchInputVersion,
 
         params: {
           ...params, // custom params from items source

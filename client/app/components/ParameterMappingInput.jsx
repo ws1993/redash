@@ -1,5 +1,3 @@
-/* eslint-disable react/no-multi-comp */
-
 import { isString, extend, each, has, map, includes, findIndex, find, fromPairs, clone, isEmpty } from "lodash";
 import React, { Fragment } from "react";
 import PropTypes from "prop-types";
@@ -33,10 +31,10 @@ export const MappingType = {
 };
 
 export function parameterMappingsToEditableMappings(mappings, parameters, existingParameterNames = []) {
-  return map(mappings, mapping => {
+  return map(mappings, (mapping) => {
     const result = extend({}, mapping);
     const alreadyExists = includes(existingParameterNames, mapping.mapTo);
-    result.param = find(parameters, p => p.name === mapping.name);
+    result.param = find(parameters, (p) => p.name === mapping.name);
     switch (mapping.type) {
       case ParameterMappingType.DashboardLevel:
         result.type = alreadyExists ? MappingType.DashboardMapToExisting : MappingType.DashboardAddNew;
@@ -62,7 +60,7 @@ export function editableMappingsToParameterMappings(mappings) {
     map(
       // convert to map
       mappings,
-      mapping => {
+      (mapping) => {
         const result = extend({}, mapping);
         switch (mapping.type) {
           case MappingType.DashboardAddNew:
@@ -95,11 +93,11 @@ export function editableMappingsToParameterMappings(mappings) {
 export function synchronizeWidgetTitles(sourceMappings, widgets) {
   const affectedWidgets = [];
 
-  each(sourceMappings, sourceMapping => {
+  each(sourceMappings, (sourceMapping) => {
     if (sourceMapping.type === ParameterMappingType.DashboardLevel) {
-      each(widgets, widget => {
+      each(widgets, (widget) => {
         const widgetMappings = widget.options.parameterMappings;
-        each(widgetMappings, widgetMapping => {
+        each(widgetMappings, (widgetMapping) => {
           // check if mapped to the same dashboard-level parameter
           if (
             widgetMapping.type === ParameterMappingType.DashboardLevel &&
@@ -121,7 +119,7 @@ export function synchronizeWidgetTitles(sourceMappings, widgets) {
 
 export class ParameterMappingInput extends React.Component {
   static propTypes = {
-    mapping: PropTypes.object, // eslint-disable-line react/forbid-prop-types
+    mapping: PropTypes.object,
     existingParamNames: PropTypes.arrayOf(PropTypes.string),
     onChange: PropTypes.func,
     inputError: PropTypes.string,
@@ -140,7 +138,7 @@ export class ParameterMappingInput extends React.Component {
     className: "form-item",
   };
 
-  updateSourceType = type => {
+  updateSourceType = (type) => {
     let {
       mapping: { mapTo },
     } = this.props;
@@ -155,7 +153,7 @@ export class ParameterMappingInput extends React.Component {
     this.updateParamMapping({ type, mapTo });
   };
 
-  updateParamMapping = update => {
+  updateParamMapping = (update) => {
     const { onChange, mapping } = this.props;
     const newMapping = extend({}, mapping, update);
     if (newMapping.value !== mapping.value) {
@@ -175,7 +173,7 @@ export class ParameterMappingInput extends React.Component {
   renderMappingTypeSelector() {
     const noExisting = isEmpty(this.props.existingParamNames);
     return (
-      <Radio.Group value={this.props.mapping.type} onChange={e => this.updateSourceType(e.target.value)}>
+      <Radio.Group value={this.props.mapping.type} onChange={(e) => this.updateSourceType(e.target.value)}>
         <Radio className="radio" value={MappingType.DashboardAddNew} data-test="NewDashboardParameterOption">
           New dashboard parameter
         </Radio>
@@ -205,16 +203,16 @@ export class ParameterMappingInput extends React.Component {
       <Input
         value={mapTo}
         aria-label="Parameter name (key)"
-        onChange={e => this.updateParamMapping({ mapTo: e.target.value })}
+        onChange={(e) => this.updateParamMapping({ mapTo: e.target.value })}
       />
     );
   }
 
   renderDashboardMapToExisting() {
     const { mapping, existingParamNames } = this.props;
-    const options = map(existingParamNames, paramName => ({ label: paramName, value: paramName }));
+    const options = map(existingParamNames, (paramName) => ({ label: paramName, value: paramName }));
 
-    return <Select value={mapping.mapTo} onChange={mapTo => this.updateParamMapping({ mapTo })} options={options} />;
+    return <Select value={mapping.mapTo} onChange={(mapTo) => this.updateParamMapping({ mapTo })} options={options} />;
   }
 
   renderStaticValue() {
@@ -226,7 +224,8 @@ export class ParameterMappingInput extends React.Component {
         enumOptions={mapping.param.enumOptions}
         queryId={mapping.param.queryId}
         parameter={mapping.param}
-        onSelect={value => this.updateParamMapping({ value })}
+        onSelect={(value) => this.updateParamMapping({ value })}
+        regex={mapping.param.regex}
       />
     );
   }
@@ -270,7 +269,7 @@ export class ParameterMappingInput extends React.Component {
 
 class MappingEditor extends React.Component {
   static propTypes = {
-    mapping: PropTypes.object.isRequired, // eslint-disable-line react/forbid-prop-types
+    mapping: PropTypes.object.isRequired,
     existingParamNames: PropTypes.arrayOf(PropTypes.string).isRequired,
     onChange: PropTypes.func.isRequired,
   };
@@ -284,12 +283,12 @@ class MappingEditor extends React.Component {
     };
   }
 
-  onVisibleChange = visible => {
+  onVisibleChange = (visible) => {
     if (visible) this.show();
     else this.hide();
   };
 
-  onChange = mapping => {
+  onChange = (mapping) => {
     let inputError = null;
 
     if (mapping.type === MappingType.DashboardAddNew) {
@@ -351,7 +350,8 @@ class MappingEditor extends React.Component {
         trigger="click"
         content={this.renderContent()}
         visible={visible}
-        onVisibleChange={this.onVisibleChange}>
+        onVisibleChange={this.onVisibleChange}
+      >
         <Button size="small" type="dashed" data-test={`EditParamMappingButton-${mapping.param.name}`}>
           <EditOutlinedIcon />
         </Button>
@@ -363,7 +363,7 @@ class MappingEditor extends React.Component {
 class TitleEditor extends React.Component {
   static propTypes = {
     existingParams: PropTypes.arrayOf(PropTypes.object),
-    mapping: PropTypes.object.isRequired, // eslint-disable-line react/forbid-prop-types
+    mapping: PropTypes.object.isRequired,
     onChange: PropTypes.func.isRequired,
   };
 
@@ -376,14 +376,14 @@ class TitleEditor extends React.Component {
     title: "", // will be set on editing
   };
 
-  onPopupVisibleChange = showPopup => {
+  onPopupVisibleChange = (showPopup) => {
     this.setState({
       showPopup,
       title: showPopup ? this.getMappingTitle() : "",
     });
   };
 
-  onEditingTitleChange = event => {
+  onEditingTitleChange = (event) => {
     this.setState({ title: event.target.value });
   };
 
@@ -447,7 +447,7 @@ class TitleEditor extends React.Component {
     if (mapping.type === MappingType.StaticValue) {
       return (
         <Tooltip placement="right" title="Titles for static values don't appear in widgets">
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
+          {/* biome-ignore lint/a11y/noNoninteractiveTabindex: Tooltip trigger, focusable so keyboard users can open the tooltip */}
           <span tabIndex={0}>
             <i className="fa fa-eye-slash" aria-hidden="true" />
           </span>
@@ -460,7 +460,8 @@ class TitleEditor extends React.Component {
         trigger="click"
         content={this.renderPopover()}
         visible={this.state.showPopup}
-        onVisibleChange={this.onPopupVisibleChange}>
+        onVisibleChange={this.onPopupVisibleChange}
+      >
         <Button size="small" type="dashed">
           <EditOutlinedIcon />
         </Button>
@@ -508,7 +509,7 @@ export class ParameterMappingListInput extends React.Component {
 
     // just to be safe, array or object
     if (typeof value === "object") {
-      return map(value, v => this.getStringValue(v)).join(", ");
+      return map(value, (v) => this.getStringValue(v)).join(", ");
     }
 
     // rest
@@ -573,8 +574,8 @@ export class ParameterMappingListInput extends React.Component {
   }
 
   render() {
-    const { existingParams } = this.props; // eslint-disable-line react/prop-types
-    const dataSource = this.props.mappings.map(mapping => ({ mapping }));
+    const { existingParams } = this.props;
+    const dataSource = this.props.mappings.map((mapping) => ({ mapping }));
 
     return (
       <div className="parameters-mapping-list">
@@ -583,11 +584,11 @@ export class ParameterMappingListInput extends React.Component {
             title="Title"
             dataIndex="mapping"
             key="title"
-            render={mapping => (
+            render={(mapping) => (
               <TitleEditor
                 existingParams={existingParams}
                 mapping={mapping}
-                onChange={newMapping => this.updateParamMapping(mapping, newMapping)}
+                onChange={(newMapping) => this.updateParamMapping(mapping, newMapping)}
               />
             )}
           />
@@ -596,19 +597,19 @@ export class ParameterMappingListInput extends React.Component {
             dataIndex="mapping"
             key="keyword"
             className="keyword"
-            render={mapping => <code>{`{{ ${mapping.name} }}`}</code>}
+            render={(mapping) => <code>{`{{ ${mapping.name} }}`}</code>}
           />
           <Table.Column
             title="Default Value"
             dataIndex="mapping"
             key="value"
-            render={mapping => this.constructor.getDefaultValue(mapping, this.props.existingParams)}
+            render={(mapping) => this.constructor.getDefaultValue(mapping, this.props.existingParams)}
           />
           <Table.Column
             title="Value Source"
             dataIndex="mapping"
             key="source"
-            render={mapping => {
+            render={(mapping) => {
               const existingParamsNames = existingParams
                 .filter(({ type }) => type === mapping.param.type) // exclude mismatching param types
                 .map(({ name }) => name); // keep names only

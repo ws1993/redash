@@ -1,26 +1,31 @@
-import re
 import logging
+import re
 from collections import OrderedDict
-from redash.query_runner import BaseQueryRunner, register
+
 from redash.query_runner import (
-    TYPE_STRING,
+    TYPE_BOOLEAN,
     TYPE_DATE,
     TYPE_DATETIME,
-    TYPE_INTEGER,
     TYPE_FLOAT,
-    TYPE_BOOLEAN,
+    TYPE_INTEGER,
+    TYPE_STRING,
+    BaseQueryRunner,
+    register,
 )
-from redash.utils import json_dumps
 
 logger = logging.getLogger(__name__)
 
 try:
-    from simple_salesforce import Salesforce as SimpleSalesforce, SalesforceError
-    from simple_salesforce.api import DEFAULT_API_VERSION
+    from simple_salesforce import Salesforce as SimpleSalesforce
+    from simple_salesforce import SalesforceError
 
     enabled = True
-except ImportError as e:
+except ImportError:
     enabled = False
+
+# simple-salesforce 1.x defaults to a newer API version. Keep the one data sources
+# without an explicit version have always used.
+DEFAULT_API_VERSION = "38.0"
 
 # See https://developer.salesforce.com/docs/atlas.en-us.api.meta/api/field_types.htm
 TYPES_MAP = dict(
@@ -78,7 +83,7 @@ class Salesforce(BaseQueryRunner):
                     "default": DEFAULT_API_VERSION,
                 },
             },
-            "required": ["username", "password", "token"],
+            "required": ["username", "password"],
             "secret": ["password", "token"],
         }
 
@@ -93,7 +98,7 @@ class Salesforce(BaseQueryRunner):
             username=self.configuration["username"],
             password=self.configuration["password"],
             security_token=self.configuration["token"],
-            sandbox=self.configuration.get("sandbox", False),
+            domain="test" if self.configuration.get("sandbox", False) else None,
             version=self.configuration.get("api_version", DEFAULT_API_VERSION),
             client_id="Redash",
         )
@@ -145,6 +150,18 @@ class Salesforce(BaseQueryRunner):
             rows.append(row)
         return rows
 
+    def _query_all(self, sf, query):
+        # Salesforce.query_all() reports the number of records it fetched as totalSize,
+        # which is 0 for `SELECT COUNT() ...`. Page through the results ourselves to
+        # keep the count reported by the server.
+        response = sf.query(query)
+        total_size = response["totalSize"]
+        records = response["records"]
+        while not response["done"]:
+            response = sf.query_more(response["nextRecordsUrl"], identifier_is_url=True)
+            records.extend(response["records"])
+        return total_size, records
+
     def run_query(self, query, user):
         logger.debug("Salesforce is about to execute query: %s", query)
         query = re.sub(r"/\*(.|\n)*?\*/", "", query).strip()
@@ -152,22 +169,20 @@ class Salesforce(BaseQueryRunner):
             columns = []
             rows = []
             sf = self._get_sf()
-            response = sf.query_all(query)
-            records = response["records"]
-            if response["totalSize"] > 0 and len(records) == 0:
+            total_size, records = self._query_all(sf, query)
+            if total_size > 0 and len(records) == 0:
                 columns = self.fetch_columns([("Count", TYPE_INTEGER)])
-                rows = [{"Count": response["totalSize"]}]
+                rows = [{"Count": total_size}]
             elif len(records) > 0:
                 cols = self._build_columns(sf, records[0])
                 rows = self._build_rows(cols, records)
                 columns = self.fetch_columns(cols)
             error = None
             data = {"columns": columns, "rows": rows}
-            json_data = json_dumps(data)
         except SalesforceError as err:
             error = err.content
-            json_data = None
-        return json_data, error
+            data = None
+        return data, error
 
     def get_schema(self, get_stats=False):
         sf = self._get_sf()

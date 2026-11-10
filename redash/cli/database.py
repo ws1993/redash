@@ -1,9 +1,11 @@
+import logging
 import time
 
+import sqlalchemy
 from click import argument, option
+from cryptography.fernet import InvalidToken
 from flask.cli import AppGroup
 from flask_migrate import stamp
-import sqlalchemy
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.sql import select
 from sqlalchemy_utils.types.encrypted.encrypted_type import FernetEngine
@@ -20,7 +22,8 @@ def _wait_for_db_connection(db):
     retried = False
     while not retried:
         try:
-            db.engine.execute("SELECT 1;")
+            with db.engine.connect() as connection:
+                connection.execute(sqlalchemy.text("SELECT 1;"))
             return
         except DatabaseError:
             time.sleep(30)
@@ -31,17 +34,18 @@ def _wait_for_db_connection(db):
 def is_db_empty():
     from redash.models import db
 
-    table_names = sqlalchemy.inspect(db.get_engine()).get_table_names()
+    table_names = sqlalchemy.inspect(db.engine).get_table_names()
     return len(table_names) == 0
 
 
 def load_extensions(db):
     with db.engine.connect() as connection:
         for extension in settings.dynamic_settings.database_extensions:
-            connection.execute(f'CREATE EXTENSION IF NOT EXISTS "{extension}";')
+            connection.execute(sqlalchemy.text(f'CREATE EXTENSION IF NOT EXISTS "{extension}";'))
+        connection.commit()
 
 
-@manager.command()
+@manager.command(name="create_tables")
 def create_tables():
     """Create the database tables."""
     from redash.models import db
@@ -61,7 +65,7 @@ def create_tables():
         stamp()
 
 
-@manager.command()
+@manager.command(name="drop_tables")
 def drop_tables():
     """Drop the database tables."""
     from redash.models import db
@@ -81,8 +85,6 @@ def reencrypt(old_secret, new_secret, show_sql):
     _wait_for_db_connection(db)
 
     if show_sql:
-        import logging
-
         logging.basicConfig()
         logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
@@ -93,9 +95,7 @@ def reencrypt(old_secret, new_secret, show_sql):
             Column("id", key_type(orm_name), primary_key=True),
             Column(
                 "encrypted_options",
-                ConfigurationContainer.as_mutable(
-                    EncryptedConfiguration(db.Text, old_secret, FernetEngine)
-                ),
+                ConfigurationContainer.as_mutable(EncryptedConfiguration(db.Text, old_secret, FernetEngine)),
             ),
         )
         table_for_update = sqlalchemy.Table(
@@ -104,19 +104,19 @@ def reencrypt(old_secret, new_secret, show_sql):
             Column("id", key_type(orm_name), primary_key=True),
             Column(
                 "encrypted_options",
-                ConfigurationContainer.as_mutable(
-                    EncryptedConfiguration(db.Text, new_secret, FernetEngine)
-                ),
+                ConfigurationContainer.as_mutable(EncryptedConfiguration(db.Text, new_secret, FernetEngine)),
             ),
         )
 
         update = table_for_update.update()
-        selected_items = db.session.execute(select([table_for_select]))
+        selected_items = db.session.execute(select(table_for_select))
         for item in selected_items:
-            stmt = update.where(table_for_update.c.id == item["id"]).values(
-                encrypted_options=item["encrypted_options"]
-            )
-            db.session.execute(stmt)
+            try:
+                stmt = update.where(table_for_update.c.id == item.id).values(encrypted_options=item.encrypted_options)
+            except InvalidToken:
+                logging.error(f"Invalid Decryption Key for id {item.id} in table {table_for_select}")
+            else:
+                db.session.execute(stmt)
 
         selected_items.close()
         db.session.commit()
